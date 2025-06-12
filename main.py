@@ -1,116 +1,83 @@
-from fastapi import FastAPI
+# main.py
+from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
-from upstox_api.api import Upstox, TransactionType, OrderType, ProductType, DurationType, LiveFeedType
-import uvicorn
-import json
+from typing import Dict
+import uuid
+import requests
 import os
 
 app = FastAPI()
 
-# === Fill these with your actual credentials ===
-api_key = '5b0b5830-a3ed-4083-a6e3-c356b3d1e34e'
-api_secret = '6v0pqbcvp5'
-redirect_uri = 'https://127.0.0.1:5000/'  # Registered in Upstox dev portal
-access_token = 'eyJ0eXAiOiJKV1QiLCJrZXlfaWQiOiJza192MS4wIiwiYWxnIjoiSFMyNTYifQ.eyJzdWIiOiI3NEFMNVoiLCJqdGkiOiI2ODRhZDMzOGI4ZWRlMDAyODkyMzUwMjciLCJpc011bHRpQ2xpZW50IjpmYWxzZSwiaXNQbHVzUGxhbiI6dHJ1ZSwiaWF0IjoxNzQ5NzM0MjAwLCJpc3MiOiJ1ZGFwaS1nYXRld2F5LXNlcnZpY2UiLCJleHAiOjE3NDk3NjU2MDB9.FiGupxajSUzJIxb4G_3ouYK__cE-7yArfn1aAlCbFlo'  # Set this after manual login flow
+# In-memory store for pending trades (use a DB for production)
+pending_trades: Dict[str, dict] = {}
 
-# === Initialize Upstox session ===
-u = Upstox(api_key, api_secret)
-u.set_access_token(access_token)
+# Load Upstox credentials from environment variables
+UPSTOX_ACCESS_TOKEN = os.getenv('UPSTOX_ACCESS_TOKEN')
+UPSTOX_BASE_URL = 'https://api.upstox.com/v2'  # Confirm latest endpoint
 
-# === Pending order queue file ===
-PENDING_FILE = "order_queue.json"
-if not os.path.exists(PENDING_FILE):
-    with open(PENDING_FILE, "w") as f:
-        json.dump([], f)
+class TradeRequest(BaseModel):
+    symbol: str
+    action: str  # "BUY" or "SELL"
+    qty: int
 
-# === Alert model ===
-class Alert(BaseModel):
-    action: str
-    symbol: str  # e.g. "NSE:RELIANCE"
-    qty: int = 0  # optional
+class ApprovalRequest(BaseModel):
+    trade_id: str
+    approve: bool
 
-# === Receive alert from TradingView ===
+def place_order_upstox(symbol: str, transaction_type: str, quantity: int, order_type='MARKET', product='CNC'):
+    url = f"{UPSTOX_BASE_URL}/order/place"
+    headers = {
+        'Authorization': f'Bearer {UPSTOX_ACCESS_TOKEN}',
+        'Content-Type': 'application/json'
+    }
+    payload = {
+        "symbol": symbol,
+        "transaction_type": transaction_type,
+        "quantity": quantity,
+        "order_type": order_type,
+        "product": product
+    }
+    response = requests.post(url, headers=headers, json=payload)
+    return response.json()
+
 @app.post("/webhook")
-async def receive_alert(alert: Alert):
-    print(f"\n[ALERT RECEIVED] {alert.dict()}")
-    with open(PENDING_FILE, "r+") as f:
-        queue = json.load(f)
-        queue.append(alert.dict())
-        f.seek(0)
-        json.dump(queue, f, indent=2)
-    return {"message": "Trade alert received. Awaiting confirmation."}
+async def receive_trade_signal(trade: TradeRequest):
+    # Validate action
+    if trade.action.upper() not in ['BUY', 'SELL']:
+        raise HTTPException(status_code=400, detail="Invalid action, must be BUY or SELL")
 
-# === View pending trades ===
-@app.get("/pending-orders")
-def view_pending():
-    with open(PENDING_FILE, "r") as f:
-        return json.load(f)
+    # Generate unique trade ID
+    trade_id = str(uuid.uuid4())
 
-# === Execute a selected trade ===
-@app.post("/execute")
-def execute_order(index: int):
-    with open(PENDING_FILE, "r+") as f:
-        queue = json.load(f)
-        if index >= len(queue):
-            return {"error": "Invalid index"}
-        order = queue.pop(index)
-        f.seek(0)
-        f.truncate()
-        json.dump(queue, f, indent=2)
+    # Store trade request as pending
+    pending_trades[trade_id] = trade.dict()
 
-    try:
-        exchange, symbol = order['symbol'].split(":")
-        instrument = u.get_instrument_by_symbol(exchange, symbol)
-        txn_type = TransactionType.Buy if order['action'].lower() == "buy" else TransactionType.Sell
+    # TODO: Send notification to yourself here (e.g., Telegram message, email)
+    # For demo, just print
+    print(f"New trade request pending approval: {trade_id} -> {trade.dict()}")
 
-        qty = order.get('qty', 0)
-        if qty == 0:
-            # Get LTP
-            quote = u.get_live_feed(instrument, LiveFeedType.LTP)
-            ltp = quote['ltp']
+    return {"message": "Trade request received and pending approval", "trade_id": trade_id}
 
-            # Get available funds
-            funds = u.get_funds()
-            available_cash = float(funds['available_margin']['equity'])
+@app.post("/approve")
+async def approve_trade(approval: ApprovalRequest):
+    trade_id = approval.trade_id
+    if trade_id not in pending_trades:
+        raise HTTPException(status_code=404, detail="Trade ID not found")
 
-            qty = int(available_cash / ltp)
-            if qty < 1:
-                return {"error": "Insufficient funds to buy even 1 share"}
-
-        # Place the order
-        response = u.place_order(
-            transaction_type=txn_type,
-            instrument=instrument,
-            quantity=qty,
-            order_type=OrderType.Market,
-            product=ProductType.Delivery,
-            duration=DurationType.DAY
+    if approval.approve:
+        trade = pending_trades.pop(trade_id)
+        # Place order on Upstox
+        order_response = place_order_upstox(
+            symbol=trade['symbol'],
+            transaction_type=trade['action'].upper(),
+            quantity=trade['qty']
         )
+        return {"message": "Order placed", "order_response": order_response}
+    else:
+        # Reject trade
+        pending_trades.pop(trade_id)
+        return {"message": "Trade rejected"}
 
-        print(f"[ORDER EXECUTED] {txn_type} {qty} of {symbol}")
-        return {
-            "message": "Trade executed successfully",
-            "symbol": symbol,
-            "qty": qty,
-            "order_id": response['data']['order_id']
-        }
-
-    except Exception as e:
-        return {"error": str(e)}
-
-# === Reject a selected trade ===
-@app.post("/reject")
-def reject_order(index: int):
-    with open(PENDING_FILE, "r+") as f:
-        queue = json.load(f)
-        if index >= len(queue):
-            return {"error": "Invalid index"}
-        removed = queue.pop(index)
-        f.seek(0)
-        f.truncate()
-        json.dump(queue, f, indent=2)
-    return {"message": "Trade rejected", "rejected_order": removed}
-
-# === Run the FastAPI app ===
-if __name__ == "__main__":
-    uvicorn.run(app, host="0.0.0.0", port=5000)
+@app.get("/pending_trades")
+async def list_pending_trades():
+    return pending_trades

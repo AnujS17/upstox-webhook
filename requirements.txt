@@ -1,3 +1,5 @@
 fastapi
 uvicorn
-git+https://github.com/upstox/upstox-python.git
+requests
+upstox-python-sdk
+
