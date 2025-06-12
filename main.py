@@ -12,7 +12,7 @@ app = FastAPI()
 
 conf = ConnectionConfig(
     MAIL_USERNAME="letchaosprevailwtf@gmail.com",
-    MAIL_PASSWORD="Oldtownroad19",
+    MAIL_PASSWORD="hppasrcrttsuculk",
     MAIL_FROM="anujsharma146201@gmail.com",
     MAIL_PORT=465,
     MAIL_SERVER="smtp.gmail.com",  # e.g., smtp.gmail.com
