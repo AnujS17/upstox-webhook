@@ -39,8 +39,8 @@ class ApprovalRequest(BaseModel):
     approve: bool
 
 async def send_trade_email(trade_id: str, trade_data: dict, background_tasks: BackgroundTasks):
-    approve_url = f"https://your-render-app-url/approve?trade_id={trade_id}&approve=true"
-    reject_url = f"https://your-render-app-url/approve?trade_id={trade_id}&approve=false"
+    approve_url = f"https://upstox-webhook-drus.onrender.com/approve?trade_id={trade_id}&approve=true"
+    reject_url = f"https://upstox-webhook-drus.onrender.com/approve?trade_id={trade_id}&approve=false"
 
     html_content = f"""
     <h3>New Trade Pending Approval</h3>
