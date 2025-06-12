@@ -98,7 +98,7 @@ async def receive_trade_signal(trade: TradeRequest, background_tasks: Background
 
     return {"message": "Trade request received and pending approval", "trade_id": trade_id}
 
-@app.post("/approve")
+@app.api_route("/approve", methods=["GET", "POST"])
 async def approve_trade_via_email(trade_id: str = Query(...), approve: bool = Query(...)):
      if trade_id not in pending_trades:
         return {"error": "Trade ID not found"}
