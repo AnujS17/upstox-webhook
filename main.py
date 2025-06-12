@@ -5,14 +5,28 @@ from typing import Dict
 import uuid
 import requests
 import os
+from fastapi_mail import ConnectionConfig, FastMail, MessageSchema, MessageType
+from fastapi import BackgroundTasks, Query
 
 app = FastAPI()
+
+conf = ConnectionConfig(
+    MAIL_USERNAME="your_email@example.com",
+    MAIL_PASSWORD="your_email_password_or_app_password",
+    MAIL_FROM="your_email@example.com",
+    MAIL_PORT=465,
+    MAIL_SERVER="smtp.example.com",  # e.g., smtp.gmail.com
+    MAIL_STARTTLS=False,
+    MAIL_SSL_TLS=True,
+    USE_CREDENTIALS=True,
+    VALIDATE_CERTS=True,
+)
 
 # In-memory store for pending trades (use a DB for production)
 pending_trades: Dict[str, dict] = {}
 
 # Load Upstox credentials from environment variables
-UPSTOX_ACCESS_TOKEN = os.getenv('UPSTOX_ACCESS_TOKEN')
+UPSTOX_ACCESS_TOKEN = 'eyJ0eXAiOiJKV1QiLCJrZXlfaWQiOiJza192MS4wIiwiYWxnIjoiSFMyNTYifQ.eyJzdWIiOiI3NEFMNVoiLCJqdGkiOiI2ODRhZDMzOGI4ZWRlMDAyODkyMzUwMjciLCJpc011bHRpQ2xpZW50IjpmYWxzZSwiaXNQbHVzUGxhbiI6dHJ1ZSwiaWF0IjoxNzQ5NzM0MjAwLCJpc3MiOiJ1ZGFwaS1nYXRld2F5LXNlcnZpY2UiLCJleHAiOjE3NDk3NjU2MDB9.FiGupxajSUzJIxb4G_3ouYK__cE-7yArfn1aAlCbFlo'
 UPSTOX_BASE_URL = 'https://api.upstox.com/v2'  # Confirm latest endpoint
 
 class TradeRequest(BaseModel):
@@ -23,6 +37,31 @@ class TradeRequest(BaseModel):
 class ApprovalRequest(BaseModel):
     trade_id: str
     approve: bool
+
+async def send_trade_email(trade_id: str, trade_data: dict, background_tasks: BackgroundTasks):
+    approve_url = f"https://your-render-app-url/approve?trade_id={trade_id}&approve=true"
+    reject_url = f"https://your-render-app-url/approve?trade_id={trade_id}&approve=false"
+
+    html_content = f"""
+    <h3>New Trade Pending Approval</h3>
+    <p>Symbol: {trade_data['symbol']}</p>
+    <p>Action: {trade_data['action']}</p>
+    <p>Quantity: {trade_data['qty']}</p>
+    <p>
+        <a href="{approve_url}" style="padding:10px; background-color:green; color:white; text-decoration:none;">Approve</a>
+        &nbsp;
+        <a href="{reject_url}" style="padding:10px; background-color:red; color:white; text-decoration:none;">Reject</a>
+    </p>
+    """
+
+    message = MessageSchema(
+        subject="Trade Approval Request",
+        recipients=["your_approval_email@example.com"],  # your email here
+        body=html_content,
+        subtype=MessageType.html,
+    )
+    fm = FastMail(conf)
+    background_tasks.add_task(fm.send_message, message)
 
 def place_order_upstox(symbol: str, transaction_type: str, quantity: int, order_type='MARKET', product='CNC'):
     url = f"{UPSTOX_BASE_URL}/order/place"
@@ -41,7 +80,7 @@ def place_order_upstox(symbol: str, transaction_type: str, quantity: int, order_
     return response.json()
 
 @app.post("/webhook")
-async def receive_trade_signal(trade: TradeRequest):
+async def receive_trade_signal(trade: TradeRequest, background_tasks: BackgroundTasks):
     # Validate action
     if trade.action.upper() not in ['BUY', 'SELL']:
         raise HTTPException(status_code=400, detail="Invalid action, must be BUY or SELL")
@@ -52,6 +91,7 @@ async def receive_trade_signal(trade: TradeRequest):
     # Store trade request as pending
     pending_trades[trade_id] = trade.dict()
 
+    await send_trade_email(trade_id, trade.dict(), background_tasks)
     # TODO: Send notification to yourself here (e.g., Telegram message, email)
     # For demo, just print
     print(f"New trade request pending approval: {trade_id} -> {trade.dict()}")
@@ -59,22 +99,19 @@ async def receive_trade_signal(trade: TradeRequest):
     return {"message": "Trade request received and pending approval", "trade_id": trade_id}
 
 @app.post("/approve")
-async def approve_trade(approval: ApprovalRequest):
-    trade_id = approval.trade_id
-    if trade_id not in pending_trades:
-        raise HTTPException(status_code=404, detail="Trade ID not found")
+async def approve_trade_via_email(trade_id: str = Query(...), approve: bool = Query(...)):
+     if trade_id not in pending_trades:
+        return {"error": "Trade ID not found"}
 
-    if approval.approve:
+     if approve:
         trade = pending_trades.pop(trade_id)
-        # Place order on Upstox
         order_response = place_order_upstox(
             symbol=trade['symbol'],
             transaction_type=trade['action'].upper(),
             quantity=trade['qty']
         )
         return {"message": "Order placed", "order_response": order_response}
-    else:
-        # Reject trade
+     else:
         pending_trades.pop(trade_id)
         return {"message": "Trade rejected"}
 
