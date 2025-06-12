@@ -3,5 +3,5 @@ uvicorn
 requests
 upstox-python-sdk
 fastapi-mail
-
+json
 

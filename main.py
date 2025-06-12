@@ -11,11 +11,11 @@ from fastapi import BackgroundTasks, Query
 app = FastAPI()
 
 conf = ConnectionConfig(
-    MAIL_USERNAME="your_email@example.com",
-    MAIL_PASSWORD="your_email_password_or_app_password",
-    MAIL_FROM="your_email@example.com",
+    MAIL_USERNAME="letchaosprevailwtf@gmail.com",
+    MAIL_PASSWORD="Oldtownroad19",
+    MAIL_FROM="anujsharma146201@gmail.com",
     MAIL_PORT=465,
-    MAIL_SERVER="smtp.example.com",  # e.g., smtp.gmail.com
+    MAIL_SERVER="smtp.gmail.com",  # e.g., smtp.gmail.com
     MAIL_STARTTLS=False,
     MAIL_SSL_TLS=True,
     USE_CREDENTIALS=True,
